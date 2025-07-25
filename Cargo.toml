@@ -1,0 +1,15 @@
+[package]
+name = "hc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dashmap = { version = "6.1.0", optional = true }
+debug-cell = "0.1.1"
+fxhash = "0.2"
+once_cell = { version = "1.21.3", optional = true}
+
+
+[features]
+sync = ["dep:dashmap", "dep:once_cell"]
+
