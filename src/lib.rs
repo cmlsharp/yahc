@@ -4,7 +4,7 @@ pub use fxhash;
 
 use std::cmp::{Eq, Ord, PartialEq, PartialOrd};
 
-pub trait HasTable: Sized {
+pub trait TableId: Sized + 'static {
     type Table;
     fn table() -> &'static Self::Table;
 }

@@ -1,45 +1,47 @@
 #![allow(dead_code)]
 
 use crate::unsync::{Consable, Hc, Weak};
-use crate::{HasTable, Id};
+use crate::Id;
 use std::cell::{Cell, RefCell};
 
 use std::thread::LocalKey as ThreadLocal;
 
 use crate::fxhash::FxHashMap as HashMap;
+use crate::unsync::TableId;
+use std::marker::PhantomData;
 
-pub struct Table<T: Consable>(ThreadLocal<InnerTable<T>>);
-impl<T: Consable> Table<T> {
+pub struct Table<T: Consable, I: TableId<T>>(ThreadLocal<InnerTable<T, I>>, PhantomData<I>);
+impl<T: Consable, I: TableId<T>> Table<T, I> {
     /// # SAFETY
-    /// Table<T> should be constructed at most once for any concrete type T. As such new_unchecked
+    /// Table<T, I> should be constructed at most once for any concrete type T. As such new_unchecked
     /// is only intended to be called inside the generate_hashcons macro. The HasTable
     /// implementation ensures that generate_hashcons can only ever be called once per concrete T
-    pub const unsafe fn new_unchecked(inner: ThreadLocal<InnerTable<T>>) -> Self {
-        Table(inner)
+    pub const unsafe fn new_unchecked(inner: ThreadLocal<InnerTable<T,I>>) -> Self {
+        Table(inner, PhantomData)
     }
 
     pub fn gc() -> usize {
-        <T as HasTable>::table().0.with(|inner| inner.gc().unwrap())
+        <I as crate::TableId>::table().0.with(|inner| inner.gc().unwrap())
     }
 
     pub fn len() -> usize {
-        <T as HasTable>::table()
+        <I as crate::TableId>::table()
             .0
             .with(|inner| inner.table.borrow().len())
     }
 
     pub fn for_each<F: FnMut(&T)>(f: F) {
-        <T as HasTable>::table().0.with(|inner| {
+        <I as crate::TableId>::table().0.with(|inner| {
             inner.table.borrow().keys().for_each(f);
         })
     }
 
-    pub(crate) fn create(t: T) -> Hc<T> {
-        <T as HasTable>::table().0.with(|inner| inner.create(t))
+    pub(crate) fn create(t: T) -> Hc<T,I> {
+        <I as crate::TableId>::table().0.with(|inner| inner.create(t))
     }
 
-    pub(crate) fn add_to_gc(w: Weak<T>) {
-        let _ = <T as HasTable>::table().0.try_with(|inner| {
+    pub(crate) fn add_to_gc(w: Weak<T,I>) {
+        let _ = <I as crate::TableId>::table().0.try_with(|inner| {
             //inner.gc.borrow_mut().to_collect.push(w);
             inner
                 .gc
@@ -51,13 +53,13 @@ impl<T: Consable> Table<T> {
     }
 
     pub fn reserve(num_nodes: usize) {
-        <T as HasTable>::table()
+        <I as crate::TableId>::table()
             .0
             .with(|inner| inner.table.borrow_mut().reserve(num_nodes))
     }
 
-    //pub fn gc_hook_add<I: Into<String>, F: Fn(Id) -> Vec<Hc<T>> + 'static>(name: I, f: F) {
-    //    <T as HasTable>::table().0.with(|inner| {
+    //pub fn gc_hook_add<I: Into<String>, F: Fn(Id) -> Vec<Hc<T,I>> + 'static>(name: I, f: F) {
+    //    <I as crate::TableId>::table().0.with(|inner| {
     //        let hooks = &mut inner.gc.borrow_mut().hooks;
     //        let name = name.into();
     //        assert!(
@@ -70,27 +72,27 @@ impl<T: Consable> Table<T> {
 
     //pub fn gc_hook_remove<I: AsRef<str>>(name: I) {
     //    let name_ref = name.as_ref();
-    //    <T as HasTable>::table().0.with(|inner| {
+    //    <I as crate::TableId>::table().0.with(|inner| {
     //        inner.gc.borrow_mut().hooks.retain(|(s, _)| s != name_ref);
     //    });
     //}
 
     //pub fn gc_hooks_clear() {
-    //    <T as HasTable>::table().0.with(|inner| {
+    //    <I as crate::TableId>::table().0.with(|inner| {
     //        inner.gc.borrow_mut().hooks.clear();
     //    });
     //}
 }
 
-//type GcHook<T> = Box<dyn Fn(Id) -> Vec<Hc<T>>>;
+//type GcHook<T> = Box<dyn Fn(Id) -> Vec<Hc<T,I>>>;
 
-struct GcData<T: Consable> {
-    to_collect: Vec<Weak<T>>,
+struct GcData<T: Consable, I: TableId<T>> {
+    to_collect: Vec<Weak<T,I>>,
     //hooks: Vec<(String, GcHook<T>)>,
 }
 
-//struct HooksDebug<'a, T: Consable>(&'a [(String, GcHook<T>)]);
-//impl<T: Consable> std::fmt::Debug for HooksDebug<'_, T> {
+//struct HooksDebug<'a, T: Consable, I: TableId<T>>(&'a [(String, GcHook<T>)]);
+//impl<T: Consable, I: TableId<T>> std::fmt::Debug for HooksDebug<'_, T> {
 //    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 //        f.debug_list()
 //            .entries(self.0.iter().map(|(n, _)| n))
@@ -98,7 +100,7 @@ struct GcData<T: Consable> {
 //    }
 //}
 
-impl<T: Consable> std::fmt::Debug for GcData<T> {
+impl<T: Consable, I: TableId<T>> std::fmt::Debug for GcData<T,I> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("GcData")
             .field("to_collect", &self.to_collect)
@@ -107,7 +109,7 @@ impl<T: Consable> std::fmt::Debug for GcData<T> {
             .finish()
     }
 }
-impl<T: Consable> Default for GcData<T> {
+impl<T: Consable, I: TableId<T>> Default for GcData<T,I> {
     fn default() -> Self {
         Self {
             to_collect: Default::default(),
@@ -116,13 +118,13 @@ impl<T: Consable> Default for GcData<T> {
     }
 }
 
-pub struct InnerTable<T: Consable> {
-    table: RefCell<HashMap<T, Hc<T>>>,
-    gc: RefCell<GcData<T>>,
+pub struct InnerTable<T: Consable, I: TableId<T>> {
+    table: RefCell<HashMap<T, Hc<T,I>>>,
+    gc: RefCell<GcData<T,I>>,
     next_id: Cell<Id>,
 }
 
-impl<T: Consable> Default for InnerTable<T> {
+impl<T: Consable, I: TableId<T>> Default for InnerTable<T,I> {
     fn default() -> Self {
         Self {
             table: Default::default(),
@@ -132,12 +134,12 @@ impl<T: Consable> Default for InnerTable<T> {
     }
 }
 
-impl<T: Consable> InnerTable<T> {
+impl<T: Consable, I: TableId<T>> InnerTable<T,I> {
     fn new() -> Self {
         Self::default()
     }
 
-    fn create(&self, data: T) -> Hc<T> {
+    fn create(&self, data: T) -> Hc<T,I> {
         self.table
             .borrow_mut()
             .entry(data)
