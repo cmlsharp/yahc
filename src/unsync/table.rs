@@ -32,7 +32,7 @@ impl<T: Consable, I: TableKey<T>> Table<T, I> {
             .with(|inner| inner.table.borrow().len())
     }
 
-    fn for_each<F: FnMut(&T)>(f: F) {
+    pub fn for_each<F: FnMut(&T)>(f: F) {
         <I as crate::TableKey>::table().0.with(|inner| {
             inner.table.borrow().keys().for_each(f);
         })
