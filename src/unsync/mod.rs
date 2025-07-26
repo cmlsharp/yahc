@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 pub mod table;
-use table::Table;
+pub use table::Table;
 
 use crate::Id;
 //use debug_cell::RefCell;
