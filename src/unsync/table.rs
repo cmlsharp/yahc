@@ -1,47 +1,51 @@
 #![allow(dead_code)]
 
-use crate::unsync::{Consable, Hc, Weak};
 use crate::Id;
+use crate::unsync::{Consable, Hc, Weak};
 use std::cell::{Cell, RefCell};
 
 use std::thread::LocalKey as ThreadLocal;
 
 use crate::fxhash::FxHashMap as HashMap;
-use crate::unsync::TableId;
+use crate::unsync::TableKey;
 use std::marker::PhantomData;
 
-pub struct Table<T: Consable, I: TableId<T>>(ThreadLocal<InnerTable<T, I>>, PhantomData<I>);
-impl<T: Consable, I: TableId<T>> Table<T, I> {
+pub struct Table<T: Consable, I: TableKey<T>>(ThreadLocal<InnerTable<T, I>>, PhantomData<I>);
+impl<T: Consable, I: TableKey<T>> Table<T, I> {
     /// # SAFETY
     /// Table<T, I> should be constructed at most once for any concrete type T. As such new_unchecked
     /// is only intended to be called inside the generate_hashcons macro. The HasTable
     /// implementation ensures that generate_hashcons can only ever be called once per concrete T
-    pub const unsafe fn new_unchecked(inner: ThreadLocal<InnerTable<T,I>>) -> Self {
+    pub const unsafe fn new_unchecked(inner: ThreadLocal<InnerTable<T, I>>) -> Self {
         Table(inner, PhantomData)
     }
 
     pub fn gc() -> usize {
-        <I as crate::TableId>::table().0.with(|inner| inner.gc().unwrap())
+        <I as crate::TableKey>::table()
+            .0
+            .with(|inner| inner.gc().unwrap())
     }
 
     pub fn len() -> usize {
-        <I as crate::TableId>::table()
+        <I as crate::TableKey>::table()
             .0
             .with(|inner| inner.table.borrow().len())
     }
 
     pub fn for_each<F: FnMut(&T)>(f: F) {
-        <I as crate::TableId>::table().0.with(|inner| {
+        <I as crate::TableKey>::table().0.with(|inner| {
             inner.table.borrow().keys().for_each(f);
         })
     }
 
-    pub(crate) fn create(t: T) -> Hc<T,I> {
-        <I as crate::TableId>::table().0.with(|inner| inner.create(t))
+    pub(crate) fn create(t: T) -> Hc<T, I> {
+        <I as crate::TableKey>::table()
+            .0
+            .with(|inner| inner.create(t))
     }
 
-    pub(crate) fn add_to_gc(w: Weak<T,I>) {
-        let _ = <I as crate::TableId>::table().0.try_with(|inner| {
+    pub(crate) fn add_to_gc(w: Weak<T, I>) {
+        let _ = <I as crate::TableKey>::table().0.try_with(|inner| {
             //inner.gc.borrow_mut().to_collect.push(w);
             inner
                 .gc
@@ -53,13 +57,13 @@ impl<T: Consable, I: TableId<T>> Table<T, I> {
     }
 
     pub fn reserve(num_nodes: usize) {
-        <I as crate::TableId>::table()
+        <I as crate::TableKey>::table()
             .0
             .with(|inner| inner.table.borrow_mut().reserve(num_nodes))
     }
 
     //pub fn gc_hook_add<I: Into<String>, F: Fn(Id) -> Vec<Hc<T,I>> + 'static>(name: I, f: F) {
-    //    <I as crate::TableId>::table().0.with(|inner| {
+    //    <I as crate::TableKey>::table().0.with(|inner| {
     //        let hooks = &mut inner.gc.borrow_mut().hooks;
     //        let name = name.into();
     //        assert!(
@@ -72,13 +76,13 @@ impl<T: Consable, I: TableId<T>> Table<T, I> {
 
     //pub fn gc_hook_remove<I: AsRef<str>>(name: I) {
     //    let name_ref = name.as_ref();
-    //    <I as crate::TableId>::table().0.with(|inner| {
+    //    <I as crate::TableKey>::table().0.with(|inner| {
     //        inner.gc.borrow_mut().hooks.retain(|(s, _)| s != name_ref);
     //    });
     //}
 
     //pub fn gc_hooks_clear() {
-    //    <I as crate::TableId>::table().0.with(|inner| {
+    //    <I as crate::TableKey>::table().0.with(|inner| {
     //        inner.gc.borrow_mut().hooks.clear();
     //    });
     //}
@@ -86,13 +90,13 @@ impl<T: Consable, I: TableId<T>> Table<T, I> {
 
 //type GcHook<T> = Box<dyn Fn(Id) -> Vec<Hc<T,I>>>;
 
-struct GcData<T: Consable, I: TableId<T>> {
-    to_collect: Vec<Weak<T,I>>,
+struct GcData<T: Consable, I: TableKey<T>> {
+    to_collect: Vec<Weak<T, I>>,
     //hooks: Vec<(String, GcHook<T>)>,
 }
 
-//struct HooksDebug<'a, T: Consable, I: TableId<T>>(&'a [(String, GcHook<T>)]);
-//impl<T: Consable, I: TableId<T>> std::fmt::Debug for HooksDebug<'_, T> {
+//struct HooksDebug<'a, T: Consable, I: TableKey<T>>(&'a [(String, GcHook<T>)]);
+//impl<T: Consable, I: TableKey<T>> std::fmt::Debug for HooksDebug<'_, T> {
 //    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 //        f.debug_list()
 //            .entries(self.0.iter().map(|(n, _)| n))
@@ -100,7 +104,7 @@ struct GcData<T: Consable, I: TableId<T>> {
 //    }
 //}
 
-impl<T: Consable, I: TableId<T>> std::fmt::Debug for GcData<T,I> {
+impl<T: Consable, I: TableKey<T>> std::fmt::Debug for GcData<T, I> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("GcData")
             .field("to_collect", &self.to_collect)
@@ -109,7 +113,7 @@ impl<T: Consable, I: TableId<T>> std::fmt::Debug for GcData<T,I> {
             .finish()
     }
 }
-impl<T: Consable, I: TableId<T>> Default for GcData<T,I> {
+impl<T: Consable, I: TableKey<T>> Default for GcData<T, I> {
     fn default() -> Self {
         Self {
             to_collect: Default::default(),
@@ -118,36 +122,31 @@ impl<T: Consable, I: TableId<T>> Default for GcData<T,I> {
     }
 }
 
-pub struct InnerTable<T: Consable, I: TableId<T>> {
-    table: RefCell<HashMap<T, Hc<T,I>>>,
-    gc: RefCell<GcData<T,I>>,
-    next_id: Cell<Id>,
+pub struct InnerTable<T: Consable, I: TableKey<T>> {
+    table: RefCell<HashMap<T, Hc<T, I>>>,
+    gc: RefCell<GcData<T, I>>,
 }
 
-impl<T: Consable, I: TableId<T>> Default for InnerTable<T,I> {
+impl<T: Consable, I: TableKey<T>> Default for InnerTable<T, I> {
     fn default() -> Self {
         Self {
             table: Default::default(),
             gc: Default::default(),
-            next_id: Default::default(),
         }
     }
 }
 
-impl<T: Consable, I: TableId<T>> InnerTable<T,I> {
+impl<T: Consable, I: TableKey<T>> InnerTable<T, I> {
     fn new() -> Self {
         Self::default()
     }
 
-    fn create(&self, data: T) -> Hc<T,I> {
+    fn create(&self, data: T) -> Hc<T, I> {
         self.table
             .borrow_mut()
             .entry(data)
             .or_insert_with_key(|key| {
-                let id = self.next_id.get();
-                self.next_id
-                    .set(Id(id.0.checked_add(1).expect("id overflow")));
-                Hc::new_unchecked(id, key.clone())
+                Hc::new_unchecked(key.clone())
             })
             .clone()
     }
@@ -176,6 +175,8 @@ impl<T: Consable, I: TableId<T>> InnerTable<T,I> {
 
             // Need rc to drop before hc, otherwise hc's ref count will be 2 when it drops
             // and it'll re-add all its children to the queue
+            // Once hc is dropped, Hc::drop is called on hc as well as all of its children
+            // Hence their destructors might cause more elements to be pushed to gc.to_collect
             std::mem::drop({
                 let rc = t.data.upgrade().expect("missing from table");
                 table.remove(&*rc).expect("missing from table")
@@ -185,11 +186,10 @@ impl<T: Consable, I: TableId<T>> InnerTable<T,I> {
             //    // Note gc hooks should probably not drop any Hcs. Currently this would result in a
             //    // panic. The alternative is to just silently not garbage collect terms which is
             //    // not ideal.
-            //    for c in {(self.gc.borrow().hooks[i].1)(id)}.into_iter() { 
+            //    for c in {(self.gc.borrow().hooks[i].1)(id)}.into_iter() {
             //    };
 
             //}
-
         }
         Some(collected)
     }

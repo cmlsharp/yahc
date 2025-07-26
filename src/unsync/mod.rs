@@ -13,51 +13,38 @@ use std::hash::Hasher;
 use std::ops::Deref;
 use std::rc::Rc;
 
+// Trait alias
 pub trait Consable: Clone + Debug + Eq + Hash + 'static {}
 impl<T> Consable for T where T: Clone + Debug + Eq + Hash + 'static {}
 
 // Trait alias
-pub trait TableId<T: Consable>: crate::TableId<Table=Table<T, Self>> {}
-impl<T: Consable,I> TableId<T> for I where I: crate::TableId<Table=Table<T, Self>> {}
+// trait TableKey<T> = crate::TableKey<Table=Table<T, Self>>
+pub trait TableKey<T: Consable>: crate::TableKey<Table = Table<T, Self>> {}
+impl<T: Consable, I> TableKey<T> for I where I: crate::TableKey<Table = Table<T, Self>> {}
 
-// If we didn't have weak pointers
-// we could avoid having a separate Id and could just use
-// Rc::as_ptr(data).addr() as the identifier. But nodes can be freed.
-// For strong pointers this would be fine, (who cares if we re-use an identifier of a node that we
-// couldn't ever compare against anyway), but weak pointers also have an id and they _could_ stick
-// around. If so, you could have two structurally unequal Weak<T,I>s which compare and hash equally,
-// violating the hashconsing guarantee. Annoying.
-//
-// Could choose to make Hc's 8-bytes by instead having them contain Rc<(T,Id)>.
-// Obviously Hc is meant to be cheaply clonable so memory savings could be significant. But its
-// heap memory and accessing id now costs a pointer dereference. Either way, Weak would still need {data,
-// id}.
-pub struct Hc<T: Consable, I: TableId<T>> {
+pub struct Hc<T: Consable, I: TableKey<T>> {
     data: Rc<T>,
-    id: Id,
     _marker: std::marker::PhantomData<I>,
 }
 
-impl<T: Consable, I: TableId<T>> Hc<T,I> {
+impl<T: Consable, I: TableKey<T>> Hc<T, I> {
     pub fn new(t: T) -> Self {
-        <I as crate::TableId>::Table::create(t)
+        <I as crate::TableKey>::Table::create(t)
     }
 
-    fn new_unchecked(id: Id, data: T) -> Self {
+    fn new_unchecked(data: T) -> Self {
         Hc {
-            id,
             data: Rc::new(data),
             _marker: std::marker::PhantomData,
         }
     }
-    pub fn id(this: &Hc<T,I>) -> Id {
-        this.id
+    pub fn id(this: &Hc<T, I>) -> Id {
+        Id(Rc::as_ptr(&this.data).addr() as u64)
     }
 
-    pub fn downgrade(this: &Hc<T,I>) -> Weak<T,I> {
+    pub fn downgrade(this: &Hc<T, I>) -> Weak<T, I> {
         Weak {
             data: Rc::downgrade(&this.data),
-            id: this.id,
             _marker: std::marker::PhantomData,
         }
     }
@@ -70,91 +57,87 @@ impl<T: Consable, I: TableId<T>> Hc<T,I> {
     }
 }
 
-impl<T: Consable, I: TableId<T>> Drop for Hc<T,I> {
+impl<T: Consable, I: TableKey<T>> Drop for Hc<T, I> {
     fn drop(&mut self) {
         //eprintln!("DROPPING");
         //eprintln!("{}:{:?}", Rc::strong_count(&self.data), &self.data);
         // This and the table entry
         if Rc::strong_count(&self.data) == 2 && !std::thread::panicking() {
-            <I as crate::TableId>::Table::add_to_gc(Hc::downgrade(self));
+            <I as crate::TableKey>::Table::add_to_gc(Hc::downgrade(self));
         }
     }
 }
 
-impl<T: Consable, I: TableId<T>> Debug for Hc<T,I> {
+impl<T: Consable, I: TableKey<T>> Debug for Hc<T, I> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Hc")
-            .field("id", &self.id)
+            .field("id", &Hc::id(&self))
             .field("data", &self.data)
             .finish()
     }
 }
 
-impl<T: Consable, I: TableId<T>> Deref for Hc<T,I> {
+impl<T: Consable, I: TableKey<T>> Deref for Hc<T, I> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.data
     }
 }
 
-impl<T: Consable, I: TableId<T>> Clone for Hc<T,I> {
+impl<T: Consable, I: TableKey<T>> Clone for Hc<T, I> {
     fn clone(&self) -> Self {
         Hc {
-            id: self.id,
             data: self.data.clone(),
             _marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<T: Consable, I: TableId<T>> PartialEq for Hc<T,I> {
+impl<T: Consable, I: TableKey<T>> PartialEq for Hc<T, I> {
     fn eq(&self, other: &Self) -> bool {
         Hc::id(self) == Hc::id(other)
     }
 }
 
-impl<T: Consable, I: TableId<T>> Eq for Hc<T,I> {}
+impl<T: Consable, I: TableKey<T>> Eq for Hc<T, I> {}
 
-impl<T: Consable, I: TableId<T>> Hash for Hc<T,I> {
+impl<T: Consable, I: TableKey<T>> Hash for Hc<T, I> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Hc::id(self).hash(state)
     }
 }
 
-pub struct Weak<T: Consable, I: TableId<T>> {
+pub struct Weak<T: Consable, I: TableKey<T>> {
     data: std::rc::Weak<T>,
-    id: Id,
     _marker: std::marker::PhantomData<I>,
 }
 
-impl<T: Consable, I: TableId<T>> Clone for Weak<T,I> {
+impl<T: Consable, I: TableKey<T>> Clone for Weak<T, I> {
     fn clone(&self) -> Self {
         Weak {
             data: self.data.clone(),
-            id: self.id,
             _marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<T: Consable, I: TableId<T>> Debug for Weak<T,I> {
+impl<T: Consable, I: TableKey<T>> Debug for Weak<T, I> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Weak")
-            .field("id", &self.id)
+            .field("id", &self.id())
             .field("data", &self.data)
             .finish()
     }
 }
 
-impl<T: Consable, I: TableId<T>> Weak<T,I> {
+impl<T: Consable, I: TableKey<T>> Weak<T, I> {
     pub fn id(&self) -> Id {
-        self.id
+        Id(self.data.as_ptr().addr() as u64)
     }
 
-    pub fn upgrade(&self) -> Option<Hc<T,I>> {
+    pub fn upgrade(&self) -> Option<Hc<T, I>> {
         self.data.upgrade().map(|data| Hc {
             data,
-            id: self.id(),
             _marker: std::marker::PhantomData,
         })
     }
@@ -164,15 +147,15 @@ impl<T: Consable, I: TableId<T>> Weak<T,I> {
     }
 }
 
-impl<T: Consable, I: TableId<T>> PartialEq for Weak<T,I> {
+impl<T: Consable, I: TableKey<T>> PartialEq for Weak<T, I> {
     fn eq(&self, other: &Self) -> bool {
         self.id() == other.id()
     }
 }
 
-impl<T: Consable, I: TableId<T>> Eq for Weak<T,I> {}
+impl<T: Consable, I: TableKey<T>> Eq for Weak<T, I> {}
 
-impl<T: Consable, I: TableId<T>> Hash for Weak<T,I> {
+impl<T: Consable, I: TableKey<T>> Hash for Weak<T, I> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id().hash(state)
     }
@@ -180,49 +163,53 @@ impl<T: Consable, I: TableId<T>> Hash for Weak<T,I> {
 
 #[macro_export]
 macro_rules! generate_hashcons_unsync {
-    ($ty:ident) => {
-        pub enum LocalId {}
+    (mod $mod:ident, $ty:ident) => {
+        mod $mod {
+            mod inner {
+                pub enum LocalKey {}
 
-        thread_local! {
-            static HC_INNER_TABLE: $crate::unsync::table::InnerTable<$ty, LocalId> = Default::default();
-        }
+                thread_local! {
+                    static HC_INNER_TABLE: $crate::unsync::table::InnerTable<super::super::$ty, LocalKey> = Default::default();
+                }
 
-        // SAFETY:
-        // We construct a totally new type LocalId in this macro, so as long
-        // as no one else calls Table::new_unchecked (per its safety contract)
-        // this is the only instance of Table<T, LocalId>
-        static HC_TABLE: $crate::unsync::Table<$ty, LocalId> =
-            unsafe { $crate::unsync::Table::new_unchecked(HC_INNER_TABLE) };
+                // SAFETY:
+                // We construct a totally new type LocalKey in this macro, so as long
+                // as no one else calls Table::new_unchecked (per its safety contract)
+                // this is the only instance of Table<T, LocalKey>
+                static HC_TABLE: $crate::unsync::Table<super::super::$ty, LocalKey> =
+                    unsafe { $crate::unsync::Table::new_unchecked(HC_INNER_TABLE) };
 
-        impl $crate::TableId for LocalId {
-            type Table = $crate::unsync::Table<$ty, LocalId>;
-            fn table() -> &'static Self::Table {
-                &HC_TABLE
+                impl $crate::TableKey for LocalKey {
+                    type Table = $crate::unsync::Table<super::super::$ty, LocalKey>;
+                    fn table() -> &'static Self::Table {
+                        &HC_TABLE
+                    }
+                }
             }
+
+            pub type Hc = $crate::unsync::Hc<super::$ty, inner::LocalKey>;
+            pub type Table = $crate::unsync::Table<super::$ty, inner::LocalKey>;
+            pub type Weak = $crate::unsync::Weak<super::$ty, inner::LocalKey>;
         }
-        // The <T> here is kinda superfluous, these are fixed to a single type type T
-        // But Hc<T> looks nice and reminds the user to construct via e.g. Hc::new()
-        pub type Hc<T> = $crate::unsync::Hc<T, LocalId>;
-        pub type Table<T> = $crate::unsync::Table<T, LocalId>;
-        pub type Weak<T> = $crate::unsync::Weak<T, LocalId>;
     };
 }
 
 #[cfg(test)]
 mod tests {
-    mod test1 {
-        generate_hashcons_unsync!(Lang);
-        #[derive(Debug, Clone, Eq, Hash, PartialEq)]
-        pub enum Lang {
-            Val(i32),
-            Add(Hc<Lang>, Hc<Lang>),
-        }
+    #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+    pub enum LangInner {
+        Val(i32),
+        Add(Lang, Lang),
     }
+    generate_hashcons_unsync!(mod test1, LangInner);
+    use test1::Hc as Lang;
 
     #[test]
     fn test() {
-        use test1::{Lang, Hc};
-        let add = Hc::new(Lang::Add(Hc::new(Lang::Val(12)), Hc::new(Lang::Val(13))));
+        let add = Lang::new(LangInner::Add(
+            Lang::new(LangInner::Val(12)),
+            Lang::new(LangInner::Val(13)),
+        ));
         drop(add);
         //assert_eq!(<Lang as HasTable>::Table::len(), 2);
         eprintln!("TABLE LEN {}", test1::Table::gc());
@@ -230,14 +217,13 @@ mod tests {
         eprintln!("TABLE LEN {}", test1::Table::gc());
     }
 
-    mod test2 {
-        mod inner { 
-            use super::TermInner;
-            generate_hashcons_unsync!(TermInner);
-        }
-        use inner::{Hc, Table};
+    // How we'd implement for circ
+    mod circ {
+        generate_hashcons_unsync!(mod inner, TermInner);
+        use inner::Hc;
+        pub use inner::Table as TermTable;
         #[derive(Eq, Hash, PartialEq, Clone)]
-        pub struct Term(Hc<TermInner>);
+        pub struct Term(Hc);
         impl std::ops::Deref for Term {
             type Target = TermInner;
             fn deref(&self) -> &Self::Target {
@@ -281,13 +267,12 @@ mod tests {
                 &self.cs
             }
         }
-        pub type TermTable = Table<TermInner>;
     }
 
     #[test]
     fn test2() {
-        use test2::Op;
-        use test2::{Term, TermTable};
+        use circ::Op;
+        use circ::{Term, TermTable};
         let term1 = Term::new(
             Op::Add,
             vec![Term::new(Op::Val(3), vec![]), Term::new(Op::Val(4), vec![])],
