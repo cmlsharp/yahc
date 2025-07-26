@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-mod table;
+pub mod table;
 use table::Table;
 
 use crate::Id;
